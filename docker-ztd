@@ -198,7 +198,7 @@ generate_traefik_conf() {
         (item["traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.healthCheck.method"] // "") == "" and
         (item["traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.healthCheck.status"] // "") == ""
       ) then
-        empty
+        null
       else
         {
           path: (item["traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.healthCheck.path"] // ""),
@@ -232,7 +232,7 @@ generate_traefik_conf() {
       ( item["traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.sticky.cookie.sameSite"] // "" ) as $sameSite |
       ( item["traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.sticky.cookie.maxAge"] // "" ) as $maxAge |
       if ($enabled == "" and $name == "" and $secure == "" and $httpOnly == "" and $sameSite == "" and $maxAge == "") then
-        empty
+        null
       else
         { cookie: (
             {}

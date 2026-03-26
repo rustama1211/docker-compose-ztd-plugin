@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -64,6 +65,10 @@ func (g *Generator) Generate(ctx context.Context, composeFiles []string, envFile
 			Routers:  map[string]types.TCPRouter{},
 			Services: map[string]types.TCPService{},
 		},
+		UDP: &types.UDPConfig{
+			Routers:  map[string]types.UDPRouter{},
+			Services: map[string]types.UDPService{},
+		},
 	}
 	processedServices := map[string]struct{}{}
 
@@ -87,32 +92,62 @@ func (g *Generator) Generate(ctx context.Context, composeFiles []string, envFile
 		}
 		processedServices[serviceName] = struct{}{}
 
+		// ── HTTP Router ────────────────────────────────────────────────────────
+
 		routerRule := labels["traefik.http.routers."+serviceName+".rule"]
 		if routerRule != "" {
-			cfg.HTTP.Routers[serviceName] = types.HTTPRouter{
-				Rule:    routerRule,
-				Service: serviceName,
+			routerSvc := labels["traefik.http.routers."+serviceName+".service"]
+			if routerSvc == "" {
+				routerSvc = serviceName
 			}
+			router := types.HTTPRouter{
+				Rule:    routerRule,
+				Service: routerSvc,
+			}
+			if eps := splitEntryPoints(labels["traefik.http.routers."+serviceName+".entrypoints"]); len(eps) > 0 {
+				router.EntryPoints = eps
+			}
+			if mws := splitEntryPoints(labels["traefik.http.routers."+serviceName+".middlewares"]); len(mws) > 0 {
+				router.Middlewares = mws
+			}
+			if pri := labels["traefik.http.routers."+serviceName+".priority"]; pri != "" {
+				if n, err := strconv.Atoi(pri); err == nil {
+					router.Priority = n
+				}
+			}
+			router.TLS = extractHTTPRouterTLS(labels, serviceName)
+			cfg.HTTP.Routers[serviceName] = router
 		}
+
+		// ── HTTP Service ───────────────────────────────────────────────────────
 
 		httpPort := labels["traefik.http.services."+serviceName+".loadbalancer.server.port"]
 		if httpPort == "" {
 			httpPort = "80"
 		}
+		httpScheme := labels["traefik.http.services."+serviceName+".loadbalancer.server.scheme"]
+		if httpScheme == "" {
+			httpScheme = "http"
+		}
 
 		httpServers := make([]types.HTTPServer, 0, len(endpoints))
 		for _, endpoint := range endpoints {
 			httpServers = append(httpServers, types.HTTPServer{
-				URL: "http://" + endpoint + ":" + httpPort,
+				URL: httpScheme + "://" + endpoint + ":" + httpPort,
 			})
 		}
 
-		httpService := types.HTTPService{
-			LoadBalancer: types.HTTPLoadBalancer{
-				Servers: httpServers,
-			},
+		httpLB := types.HTTPLoadBalancer{Servers: httpServers}
+
+		if pph := labels["traefik.http.services."+serviceName+".loadbalancer.passhostheader"]; pph != "" {
+			b := pph == "true"
+			httpLB.PassHostHeader = &b
+		}
+		if fi := labels["traefik.http.services."+serviceName+".loadbalancer.responseforwarding.flushinterval"]; fi != "" {
+			httpLB.ResponseForwarding = &types.ResponseForwarding{FlushInterval: fi}
 		}
 
+		httpService := types.HTTPService{LoadBalancer: httpLB}
 		if hc := extractHealthCheck(labels, serviceName); hc != nil {
 			httpService.LoadBalancer.HealthCheck = hc
 		}
@@ -120,6 +155,17 @@ func (g *Generator) Generate(ctx context.Context, composeFiles []string, envFile
 			httpService.LoadBalancer.Sticky = sticky
 		}
 		cfg.HTTP.Services[serviceName] = httpService
+
+		// ── HTTP Middlewares (generic) ─────────────────────────────────────────
+
+		for mwName, mwConfig := range extractMiddlewares(labels) {
+			if cfg.HTTP.Middlewares == nil {
+				cfg.HTTP.Middlewares = map[string]map[string]interface{}{}
+			}
+			cfg.HTTP.Middlewares[mwName] = mwConfig
+		}
+
+		// ── TCP ────────────────────────────────────────────────────────────────
 
 		for _, tcpName := range tcpRouterNames(labels) {
 			tcpRule := labels["traefik.tcp.routers."+tcpName+".rule"]
@@ -132,14 +178,18 @@ func (g *Generator) Generate(ctx context.Context, composeFiles []string, envFile
 				continue
 			}
 
-			router := types.TCPRouter{
+			tcpRouter := types.TCPRouter{
 				Rule:    tcpRule,
 				Service: tcpServiceName,
 			}
 			if eps := splitEntryPoints(labels["traefik.tcp.routers."+tcpName+".entrypoints"]); len(eps) > 0 {
-				router.EntryPoints = eps
+				tcpRouter.EntryPoints = eps
 			}
-			cfg.TCP.Routers[tcpName] = router
+			if mws := splitEntryPoints(labels["traefik.tcp.routers."+tcpName+".middlewares"]); len(mws) > 0 {
+				tcpRouter.Middlewares = mws
+			}
+			tcpRouter.TLS = extractTCPRouterTLS(labels, tcpName)
+			cfg.TCP.Routers[tcpName] = tcpRouter
 
 			tcpServers := make([]types.TCPServer, 0, len(endpoints))
 			for _, endpoint := range endpoints {
@@ -147,22 +197,63 @@ func (g *Generator) Generate(ctx context.Context, composeFiles []string, envFile
 					Address: endpoint + ":" + tcpPort,
 				})
 			}
-			cfg.TCP.Services[tcpServiceName] = types.TCPService{
-				LoadBalancer: types.TCPLoadBalancer{
-					Servers: tcpServers,
-				},
+			tcpLB := types.TCPLoadBalancer{Servers: tcpServers}
+			if td := labels["traefik.tcp.services."+tcpServiceName+".loadbalancer.terminationdelay"]; td != "" {
+				if n, err := strconv.Atoi(td); err == nil {
+					tcpLB.TerminationDelay = n
+				}
+			}
+			if ppv := labels["traefik.tcp.services."+tcpServiceName+".loadbalancer.proxyprotocol.version"]; ppv != "" {
+				if n, err := strconv.Atoi(ppv); err == nil {
+					tcpLB.ProxyProtocol = &types.ProxyProtocol{Version: n}
+				}
+			}
+			cfg.TCP.Services[tcpServiceName] = types.TCPService{LoadBalancer: tcpLB}
+		}
+
+		// ── UDP ────────────────────────────────────────────────────────────────
+
+		for _, udpName := range udpRouterNames(labels) {
+			udpServiceName := labels["traefik.udp.routers."+udpName+".service"]
+			if udpServiceName == "" {
+				udpServiceName = udpName
+			}
+			udpPort := labels["traefik.udp.services."+udpServiceName+".loadbalancer.server.port"]
+			if udpPort == "" {
+				continue
+			}
+
+			udpRouter := types.UDPRouter{Service: udpServiceName}
+			if eps := splitEntryPoints(labels["traefik.udp.routers."+udpName+".entrypoints"]); len(eps) > 0 {
+				udpRouter.EntryPoints = eps
+			}
+			cfg.UDP.Routers[udpName] = udpRouter
+
+			udpServers := make([]types.UDPServer, 0, len(endpoints))
+			for _, endpoint := range endpoints {
+				udpServers = append(udpServers, types.UDPServer{
+					Address: endpoint + ":" + udpPort,
+				})
+			}
+			cfg.UDP.Services[udpServiceName] = types.UDPService{
+				LoadBalancer: types.UDPLoadBalancer{Servers: udpServers},
 			}
 		}
 	}
 
-	if len(cfg.HTTP.Routers) == 0 && len(cfg.HTTP.Services) == 0 && len(cfg.TCP.Routers) == 0 && len(cfg.TCP.Services) == 0 {
+	if len(cfg.HTTP.Routers) == 0 && len(cfg.HTTP.Services) == 0 &&
+		len(cfg.TCP.Routers) == 0 && len(cfg.TCP.Services) == 0 &&
+		len(cfg.UDP.Routers) == 0 && len(cfg.UDP.Services) == 0 {
 		return fmt.Errorf("generated Traefik configuration is empty")
 	}
-	if len(cfg.HTTP.Routers) == 0 && len(cfg.HTTP.Services) == 0 {
+	if len(cfg.HTTP.Routers) == 0 && len(cfg.HTTP.Services) == 0 && len(cfg.HTTP.Middlewares) == 0 {
 		cfg.HTTP = nil
 	}
 	if len(cfg.TCP.Routers) == 0 && len(cfg.TCP.Services) == 0 {
 		cfg.TCP = nil
+	}
+	if len(cfg.UDP.Routers) == 0 && len(cfg.UDP.Services) == 0 {
+		cfg.UDP = nil
 	}
 
 	data, err := configio.MarshalYAML(cfg)
@@ -243,6 +334,128 @@ func extractSticky(labels map[string]string, serviceName string) *types.Sticky {
 	return &types.Sticky{Cookie: cookie}
 }
 
+// extractHTTPRouterTLS builds a RouterTLS from traefik.http.routers.<name>.tls* labels.
+// Returns nil when no TLS labels are present.
+func extractHTTPRouterTLS(labels map[string]string, routerName string) *types.RouterTLS {
+	prefix := "traefik.http.routers." + routerName + ".tls"
+	hasTLS := false
+	for k := range labels {
+		if strings.HasPrefix(k, prefix) {
+			hasTLS = true
+			break
+		}
+	}
+	if !hasTLS {
+		return nil
+	}
+	// bare tls=false with no sub-labels → do not enable TLS
+	if v, ok := labels[prefix]; ok && v == "false" {
+		hasSubLabels := false
+		for k := range labels {
+			if strings.HasPrefix(k, prefix+".") {
+				hasSubLabels = true
+				break
+			}
+		}
+		if !hasSubLabels {
+			return nil
+		}
+	}
+
+	tls := &types.RouterTLS{}
+	if v := labels[prefix+".certresolver"]; v != "" {
+		tls.CertResolver = v
+	}
+	if v := labels[prefix+".options"]; v != "" {
+		tls.Options = v
+	}
+
+	// tls.domains[n].main / tls.domains[n].sans
+	re := regexp.MustCompile(
+		`^traefik\.http\.routers\.` + regexp.QuoteMeta(routerName) + `\.tls\.domains\[(\d+)\]\.(main|sans)$`,
+	)
+	type domainEntry struct {
+		Main string
+		SANs []string
+	}
+	domains := map[int]*domainEntry{}
+	for k, v := range labels {
+		if m := re.FindStringSubmatch(k); m != nil {
+			idx, _ := strconv.Atoi(m[1])
+			if domains[idx] == nil {
+				domains[idx] = &domainEntry{}
+			}
+			if m[2] == "main" {
+				domains[idx].Main = v
+			} else {
+				domains[idx].SANs = splitEntryPoints(v)
+			}
+		}
+	}
+	if len(domains) > 0 {
+		indices := make([]int, 0, len(domains))
+		for i := range domains {
+			indices = append(indices, i)
+		}
+		sort.Ints(indices)
+		for _, i := range indices {
+			d := domains[i]
+			tls.Domains = append(tls.Domains, types.TLSDomain{Main: d.Main, SANs: d.SANs})
+		}
+	}
+
+	return tls
+}
+
+// extractTCPRouterTLS builds a TCPRouterTLS from traefik.tcp.routers.<name>.tls* labels.
+// Returns nil when no TLS labels are present.
+func extractTCPRouterTLS(labels map[string]string, routerName string) *types.TCPRouterTLS {
+	prefix := "traefik.tcp.routers." + routerName + ".tls"
+	hasTLS := false
+	for k := range labels {
+		if strings.HasPrefix(k, prefix) {
+			hasTLS = true
+			break
+		}
+	}
+	if !hasTLS {
+		return nil
+	}
+
+	tls := &types.TCPRouterTLS{}
+	if labels[prefix+".passthrough"] == "true" {
+		tls.Passthrough = true
+	}
+	if v := labels[prefix+".certresolver"]; v != "" {
+		tls.CertResolver = v
+	}
+	if v := labels[prefix+".options"]; v != "" {
+		tls.Options = v
+	}
+	return tls
+}
+
+// extractMiddlewares parses all traefik.http.middlewares.<name>.* labels into a
+// map keyed by middleware name. Dot-notation paths and [n] array indices are
+// converted to nested map/slice structures. Values are coerced to bool/int/string.
+func extractMiddlewares(labels map[string]string) map[string]map[string]interface{} {
+	result := map[string]map[string]interface{}{}
+	for _, mwName := range middlewareNames(labels) {
+		prefix := "traefik.http.middlewares." + mwName + "."
+		config := map[string]interface{}{}
+		for k, v := range labels {
+			if strings.HasPrefix(k, prefix) {
+				subPath := strings.TrimPrefix(k, prefix)
+				setNestedValue(config, parseLabelPath(subPath), coerceLabelValue(v))
+			}
+		}
+		if len(config) > 0 {
+			result[mwName] = config
+		}
+	}
+	return result
+}
+
 func tcpRouterNames(labels map[string]string) []string {
 	set := map[string]struct{}{}
 	for key := range labels {
@@ -253,7 +466,42 @@ func tcpRouterNames(labels map[string]string) []string {
 			}
 		}
 	}
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
 
+func middlewareNames(labels map[string]string) []string {
+	set := map[string]struct{}{}
+	for key := range labels {
+		if strings.HasPrefix(key, "traefik.http.middlewares.") {
+			parts := strings.Split(key, ".")
+			if len(parts) >= 4 {
+				set[parts[3]] = struct{}{}
+			}
+		}
+	}
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func udpRouterNames(labels map[string]string) []string {
+	set := map[string]struct{}{}
+	for key := range labels {
+		if strings.HasPrefix(key, "traefik.udp.routers.") {
+			parts := strings.Split(key, ".")
+			if len(parts) >= 4 {
+				set[parts[3]] = struct{}{}
+			}
+		}
+	}
 	names := make([]string, 0, len(set))
 	for n := range set {
 		names = append(names, n)
@@ -275,4 +523,71 @@ func splitEntryPoints(raw string) []string {
 		}
 	}
 	return out
+}
+
+// parseLabelPath converts a dot-notation path string (with optional [n] array indices)
+// into a slice of path components.
+// e.g. "tls.domains[0].main" → ["tls", "domains", "0", "main"]
+var reBracketIndex = regexp.MustCompile(`\[(\d+)\]`)
+
+func parseLabelPath(s string) []string {
+	s = reBracketIndex.ReplaceAllString(s, ".$1")
+	return strings.Split(s, ".")
+}
+
+// coerceLabelValue converts a Traefik label string to its natural Go type.
+func coerceLabelValue(v string) interface{} {
+	if v == "true" {
+		return true
+	}
+	if v == "false" {
+		return false
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		return n
+	}
+	return v
+}
+
+// setNestedValue sets value in a nested map[string]interface{} using a path slice.
+// Numeric path components create/index into []interface{} slices.
+func setNestedValue(m map[string]interface{}, path []string, value interface{}) {
+	if len(path) == 0 {
+		return
+	}
+	key := path[0]
+	if len(path) == 1 {
+		m[key] = value
+		return
+	}
+	// If the next component is a numeric index, the current key maps to a slice.
+	if idx, err := strconv.Atoi(path[1]); err == nil {
+		var sl []interface{}
+		if existing, ok := m[key]; ok {
+			if s, ok := existing.([]interface{}); ok {
+				sl = s
+			}
+		}
+		for len(sl) <= idx {
+			sl = append(sl, nil)
+		}
+		if len(path) == 2 {
+			sl[idx] = value
+		} else {
+			sub, _ := sl[idx].(map[string]interface{})
+			if sub == nil {
+				sub = map[string]interface{}{}
+			}
+			setNestedValue(sub, path[2:], value)
+			sl[idx] = sub
+		}
+		m[key] = sl
+	} else {
+		sub, _ := m[key].(map[string]interface{})
+		if sub == nil {
+			sub = map[string]interface{}{}
+		}
+		setNestedValue(sub, path[1:], value)
+		m[key] = sub
+	}
 }

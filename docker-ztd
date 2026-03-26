@@ -161,11 +161,29 @@ generate_traefik_conf() {
   # Get the container labels and process them to create a Traefik configuration
   $COMPOSE_COMMAND $COMPOSE_FILES $ENV_FILES ps --quiet | xargs -I {} docker inspect --format '{{json .Config.Labels}}' {} | jq -s --arg service_ips "$service_ips" '
     def split_ips:
-      reduce ($service_ips | split(" "))[] as $item ({}; 
+      reduce ($service_ips | split(" "))[] as $item ({};
         if ($item | contains(":")) then
           . + { ($item | split(":")[0]): (.[$item | split(":")[0]] + [ $item | split(":")[1] ] // []) }
         else . end
       );
+
+    # Convert a dot-notation string with optional [n] indices to a jq path array.
+    # e.g. "tls.domains[0].main" -> ["tls","domains",0,"main"]
+    def to_nested_path:
+      gsub("\\[(?<n>[0-9]+)\\]"; ".\(.n)")
+      | split(".")
+      | map(if test("^[0-9]+$") then tonumber else . end);
+
+    # Coerce string values to their natural types for config output.
+    def coerce_value:
+      if . == "true" then true
+      elif . == "false" then false
+      elif (. != "" and test("^-?[0-9]+$")) then tonumber
+      else . end;
+
+    # Split a comma-separated string into a trimmed array.
+    def csv_to_array:
+      split(",") | map(gsub("^\\s+"; "") | gsub("\\s+$"; ""));
 
     def extract_health_check(item):
       if (
@@ -227,44 +245,157 @@ generate_traefik_conf() {
         }
       end;
 
+    reduce .[] as $item ({};
+      ($item["com.docker.compose.service"]) as $svc |
+      if ($svc | in(split_ips)) then
 
+        # ── HTTP Router ────────────────────────────────────────────────
 
-    reduce .[] as $item ({}; 
-      if ($item["com.docker.compose.service"] | in(split_ips)) then
+        .http.routers[$svc].rule = ($item["traefik.http.routers.\($svc).rule"] // null) |
 
-        .http.routers[$item["com.docker.compose.service"]].rule = $item["traefik.http.routers.\($item["com.docker.compose.service"]).rule"] // null |
-        .http.routers[$item["com.docker.compose.service"]].service = $item["com.docker.compose.service"] |
-        .http.services[$item["com.docker.compose.service"]].loadBalancer.servers = 
-          (split_ips[$item["com.docker.compose.service"]] | map({url: ("http://" + . + ":" + ($item["traefik.http.services.\($item["com.docker.compose.service"]).loadbalancer.server.port"] // "80"))})) |
-      
+        # service: explicit override or default to compose service name
+        .http.routers[$svc].service = ($item["traefik.http.routers.\($svc).service"] // $svc) |
+
+        # entryPoints
+        (($item["traefik.http.routers.\($svc).entrypoints"] // "") as $ep |
+          if $ep != "" then .http.routers[$svc].entryPoints = ($ep | csv_to_array) else . end
+        ) |
+
+        # middlewares
+        (($item["traefik.http.routers.\($svc).middlewares"] // "") as $mw |
+          if $mw != "" then .http.routers[$svc].middlewares = ($mw | csv_to_array) else . end
+        ) |
+
+        # priority
+        (($item["traefik.http.routers.\($svc).priority"] // "") as $pri |
+          if $pri != "" then .http.routers[$svc].priority = ($pri | tonumber) else . end
+        ) |
+
+        # TLS — generic: handles tls, tls.certresolver, tls.options,
+        #   tls.domains[n].main, tls.domains[n].sans, etc.
+        ( . as $state |
+          [ $item | to_entries[] | select(.key | startswith("traefik.http.routers.\($svc).tls")) ] |
+          if length > 0 then
+            reduce .[] as $e (
+              $state;
+              if $e.key == "traefik.http.routers.\($svc).tls" then
+                # bare tls=true → enable with empty object (only if not already set)
+                if ($e.value == "true" and (.http.routers[$svc].tls == null)) then
+                  .http.routers[$svc].tls = {}
+                else . end
+              else
+                ( $e.key | ltrimstr("traefik.http.routers.\($svc).") | to_nested_path ) as $path |
+                setpath(["http","routers",$svc] + $path; ($e.value | coerce_value))
+              end
+            )
+          else $state end
+        ) |
+
+        # ── HTTP Service ───────────────────────────────────────────────
+
+        # servers — scheme label overrides default "http"
+        (($item["traefik.http.services.\($svc).loadbalancer.server.scheme"] // "http") as $scheme |
+          .http.services[$svc].loadBalancer.servers =
+            (split_ips[$svc] | map({url: ($scheme + "://" + . + ":" + ($item["traefik.http.services.\($svc).loadbalancer.server.port"] // "80"))}))
+        ) |
+
+        # passHostHeader
+        (($item["traefik.http.services.\($svc).loadbalancer.passhostheader"] // "") as $pph |
+          if $pph != "" then .http.services[$svc].loadBalancer.passHostHeader = ($pph == "true") else . end
+        ) |
+
+        # responseForwarding.flushInterval
+        (($item["traefik.http.services.\($svc).loadbalancer.responseforwarding.flushinterval"] // "") as $fi |
+          if $fi != "" then .http.services[$svc].loadBalancer.responseForwarding.flushInterval = $fi else . end
+        ) |
+
         (extract_health_check($item) as $hc |
-          if $hc then
-            .http.services[$item["com.docker.compose.service"]].loadBalancer += { healthCheck: $hc }
-          else
-            .
-          end
+          if $hc then .http.services[$svc].loadBalancer += { healthCheck: $hc } else . end
         ) |
 
         (extract_sticky($item) as $sticky |
-          if $sticky then
-            .http.services[$item["com.docker.compose.service"]].loadBalancer += { sticky: $sticky }
-          else
-            .
-          end
+          if $sticky then .http.services[$svc].loadBalancer += { sticky: $sticky } else . end
         ) |
 
-        ( . as $state | [ $item | keys[] | select(startswith("traefik.tcp.routers.")) | split(".") | .[3] ] | unique | reduce .[] as $tcp_name ($state;
-          ( ($item["traefik.tcp.routers.\($tcp_name).rule"] // "") as $tcp_rule
-          | ($item["traefik.tcp.routers.\($tcp_name).service"] // $tcp_name) as $tcp_svc
-          | ($item["traefik.tcp.services.\($tcp_svc).loadbalancer.server.port"] // "") as $tcp_port
-          | (($item["traefik.tcp.routers.\($tcp_name).entrypoints"] // "") | if . == "" then [] else split(",") | map(gsub("^\\s+";"") | gsub("\\s+$";"")) end) as $tcp_ep
-          | if $tcp_rule != "" and $tcp_port != "" then
-              .tcp.routers[$tcp_name] = ({ rule: $tcp_rule, service: $tcp_svc } + (if ($tcp_ep | length) > 0 then { entryPoints: $tcp_ep } else {} end)) |
-              .tcp.services[$tcp_svc].loadBalancer.servers = (split_ips[$item["com.docker.compose.service"]] | map({ address: (. + ":" + $tcp_port) }))
-            else .
-            end
+        # ── HTTP Middlewares (generic) ─────────────────────────────────
+        # Collects all traefik.http.middlewares.<name>.* labels and converts
+        # dot-notation paths (including [n] array indices) into nested config.
+
+        ( . as $state |
+          [ $item | keys[] | select(startswith("traefik.http.middlewares.")) | split(".")[3] ] | unique |
+          reduce .[] as $mw_name ($state;
+            (
+              $item | to_entries |
+              map(select(.key | startswith("traefik.http.middlewares.\($mw_name)."))) |
+              reduce .[] as $e (
+                {};
+                ( $e.key | ltrimstr("traefik.http.middlewares.\($mw_name).") | to_nested_path ) as $path |
+                setpath($path; ($e.value | coerce_value))
+              )
+            ) as $mw_config |
+            if ($mw_config | length) > 0 then .http.middlewares[$mw_name] = $mw_config else . end
           )
-        ))
+        ) |
+
+        # ── TCP ────────────────────────────────────────────────────────
+
+        ( . as $state |
+          [ $item | keys[] | select(startswith("traefik.tcp.routers.")) | split(".")[3] ] | unique |
+          reduce .[] as $tcp_name ($state;
+            ( ($item["traefik.tcp.routers.\($tcp_name).rule"] // "") as $tcp_rule
+            | ($item["traefik.tcp.routers.\($tcp_name).service"] // $tcp_name) as $tcp_svc
+            | ($item["traefik.tcp.services.\($tcp_svc).loadbalancer.server.port"] // "") as $tcp_port
+            | (($item["traefik.tcp.routers.\($tcp_name).entrypoints"] // "") | if . == "" then [] else csv_to_array end) as $tcp_ep
+            | ($item["traefik.tcp.routers.\($tcp_name).middlewares"] // "") as $tcp_mw
+            | ($item["traefik.tcp.routers.\($tcp_name).tls"] // "") as $tcp_tls
+            | ($item["traefik.tcp.routers.\($tcp_name).tls.passthrough"] // "") as $tcp_pt
+            | ($item["traefik.tcp.routers.\($tcp_name).tls.certresolver"] // "") as $tcp_cr
+            | ($item["traefik.tcp.routers.\($tcp_name).tls.options"] // "") as $tcp_opts
+            | ($item["traefik.tcp.services.\($tcp_svc).loadbalancer.terminationdelay"] // "") as $tcp_td
+            | ($item["traefik.tcp.services.\($tcp_svc).loadbalancer.proxyprotocol.version"] // "") as $tcp_pp
+            | if $tcp_rule != "" and $tcp_port != "" then
+                .tcp.routers[$tcp_name] = (
+                  { rule: $tcp_rule, service: $tcp_svc }
+                  + (if ($tcp_ep | length) > 0 then { entryPoints: $tcp_ep } else {} end)
+                  + (if $tcp_mw != "" then { middlewares: ($tcp_mw | csv_to_array) } else {} end)
+                ) |
+                ( if $tcp_tls == "true" or $tcp_pt != "" or $tcp_cr != "" or $tcp_opts != "" then
+                    .tcp.routers[$tcp_name].tls = (
+                      {}
+                      | if $tcp_pt == "true" then . + { passthrough: true } else . end
+                      | if $tcp_cr != "" then . + { certResolver: $tcp_cr } else . end
+                      | if $tcp_opts != "" then . + { options: $tcp_opts } else . end
+                    )
+                  else . end
+                ) |
+                .tcp.services[$tcp_svc].loadBalancer.servers = (split_ips[$svc] | map({ address: (. + ":" + $tcp_port) })) |
+                ( if $tcp_td != "" then .tcp.services[$tcp_svc].loadBalancer.terminationDelay = ($tcp_td | tonumber) else . end ) |
+                ( if $tcp_pp != "" then .tcp.services[$tcp_svc].loadBalancer.proxyProtocol.version = ($tcp_pp | tonumber) else . end )
+              else .
+              end
+            )
+          )
+        ) |
+
+        # ── UDP ────────────────────────────────────────────────────────
+
+        ( . as $state |
+          [ $item | keys[] | select(startswith("traefik.udp.routers.")) | split(".")[3] ] | unique |
+          reduce .[] as $udp_name ($state;
+            ( ($item["traefik.udp.routers.\($udp_name).service"] // $udp_name) as $udp_svc
+            | ($item["traefik.udp.services.\($udp_svc).loadbalancer.server.port"] // "") as $udp_port
+            | (($item["traefik.udp.routers.\($udp_name).entrypoints"] // "") | if . == "" then [] else csv_to_array end) as $udp_ep
+            | if $udp_port != "" then
+                .udp.routers[$udp_name] = (
+                  { service: $udp_svc }
+                  + (if ($udp_ep | length) > 0 then { entryPoints: $udp_ep } else {} end)
+                ) |
+                .udp.services[$udp_svc].loadBalancer.servers = (split_ips[$svc] | map({ address: (. + ":" + $udp_port) }))
+              else .
+              end
+            )
+          )
+        )
 
       else . end
     )' > dynamic.json

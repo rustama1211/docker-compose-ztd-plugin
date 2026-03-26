@@ -82,9 +82,26 @@ Options:
 
 ## Traefik Labels Supported
 
+### General
 - `traefik.enable`
+
+### HTTP Routers
 - `traefik.http.routers.<name>.rule`
+- `traefik.http.routers.<name>.entrypoints`
+- `traefik.http.routers.<name>.middlewares`
+- `traefik.http.routers.<name>.service`
+- `traefik.http.routers.<name>.priority`
+- `traefik.http.routers.<name>.tls`
+- `traefik.http.routers.<name>.tls.certresolver`
+- `traefik.http.routers.<name>.tls.options`
+- `traefik.http.routers.<name>.tls.domains[n].main`
+- `traefik.http.routers.<name>.tls.domains[n].sans`
+
+### HTTP Services
 - `traefik.http.services.<name>.loadbalancer.server.port`
+- `traefik.http.services.<name>.loadbalancer.server.scheme`
+- `traefik.http.services.<name>.loadbalancer.passhostheader`
+- `traefik.http.services.<name>.loadbalancer.responseforwarding.flushinterval`
 - `traefik.http.services.<name>.loadbalancer.healthCheck.path`
 - `traefik.http.services.<name>.loadbalancer.healthCheck.interval`
 - `traefik.http.services.<name>.loadbalancer.healthCheck.timeout`
@@ -96,9 +113,51 @@ Options:
 - `traefik.http.services.<name>.loadbalancer.healthCheck.followRedirects`
 - `traefik.http.services.<name>.loadbalancer.healthCheck.method`
 - `traefik.http.services.<name>.loadbalancer.healthCheck.status`
+- `traefik.http.services.<name>.loadbalancer.sticky.cookie`
+- `traefik.http.services.<name>.loadbalancer.sticky.cookie.name`
+- `traefik.http.services.<name>.loadbalancer.sticky.cookie.secure`
+- `traefik.http.services.<name>.loadbalancer.sticky.cookie.httpOnly`
+- `traefik.http.services.<name>.loadbalancer.sticky.cookie.sameSite`
+- `traefik.http.services.<name>.loadbalancer.sticky.cookie.maxAge`
+
+### HTTP Middlewares (all types, generic)
+All `traefik.http.middlewares.<name>.<type>.*` labels are supported generically.
+Dot-notation paths and `[n]` array indices are converted to nested config. Examples:
+- `traefik.http.middlewares.<name>.redirectscheme.scheme`
+- `traefik.http.middlewares.<name>.redirectscheme.permanent`
+- `traefik.http.middlewares.<name>.basicauth.users`
+- `traefik.http.middlewares.<name>.basicauth.realm`
+- `traefik.http.middlewares.<name>.ratelimit.average`
+- `traefik.http.middlewares.<name>.ratelimit.burst`
+- `traefik.http.middlewares.<name>.headers.customrequestheaders.<header>`
+- `traefik.http.middlewares.<name>.headers.customresponseheaders.<header>`
+- `traefik.http.middlewares.<name>.forwardauth.address`
+- `traefik.http.middlewares.<name>.forwardauth.trustforwardheader`
+- `traefik.http.middlewares.<name>.stripprefix.prefixes`
+- `traefik.http.middlewares.<name>.compress.minresponsebodybytes`
+- … and all other middleware types
+
+### TCP Routers
 - `traefik.tcp.routers.<name>.rule`
 - `traefik.tcp.routers.<name>.entrypoints`
+- `traefik.tcp.routers.<name>.middlewares`
+- `traefik.tcp.routers.<name>.service`
+- `traefik.tcp.routers.<name>.tls`
+- `traefik.tcp.routers.<name>.tls.passthrough`
+- `traefik.tcp.routers.<name>.tls.certresolver`
+- `traefik.tcp.routers.<name>.tls.options`
+
+### TCP Services
 - `traefik.tcp.services.<name>.loadbalancer.server.port`
+- `traefik.tcp.services.<name>.loadbalancer.terminationdelay`
+- `traefik.tcp.services.<name>.loadbalancer.proxyprotocol.version`
+
+### UDP Routers
+- `traefik.udp.routers.<name>.entrypoints`
+- `traefik.udp.routers.<name>.service`
+
+### UDP Services
+- `traefik.udp.services.<name>.loadbalancer.server.port`
 
 ## Notes
 

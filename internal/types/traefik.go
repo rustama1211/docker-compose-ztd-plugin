@@ -3,16 +3,33 @@ package types
 type DynamicConfig struct {
 	HTTP *HTTPConfig `yaml:"http,omitempty"`
 	TCP  *TCPConfig  `yaml:"tcp,omitempty"`
+	UDP  *UDPConfig  `yaml:"udp,omitempty"`
 }
 
 type HTTPConfig struct {
-	Routers  map[string]HTTPRouter  `yaml:"routers,omitempty"`
-	Services map[string]HTTPService `yaml:"services,omitempty"`
+	Routers     map[string]HTTPRouter             `yaml:"routers,omitempty"`
+	Middlewares map[string]map[string]interface{} `yaml:"middlewares,omitempty"`
+	Services    map[string]HTTPService            `yaml:"services,omitempty"`
 }
 
 type HTTPRouter struct {
-	Rule    string `yaml:"rule,omitempty"`
-	Service string `yaml:"service,omitempty"`
+	Rule        string     `yaml:"rule,omitempty"`
+	EntryPoints []string   `yaml:"entryPoints,omitempty"`
+	Middlewares []string   `yaml:"middlewares,omitempty"`
+	Service     string     `yaml:"service,omitempty"`
+	Priority    int        `yaml:"priority,omitempty"`
+	TLS         *RouterTLS `yaml:"tls,omitempty"`
+}
+
+type RouterTLS struct {
+	CertResolver string      `yaml:"certResolver,omitempty"`
+	Options      string      `yaml:"options,omitempty"`
+	Domains      []TLSDomain `yaml:"domains,omitempty"`
+}
+
+type TLSDomain struct {
+	Main string   `yaml:"main,omitempty"`
+	SANs []string `yaml:"sans,omitempty"`
 }
 
 type HTTPService struct {
@@ -20,9 +37,15 @@ type HTTPService struct {
 }
 
 type HTTPLoadBalancer struct {
-	Servers     []HTTPServer  `yaml:"servers,omitempty"`
-	HealthCheck *HealthChecks `yaml:"healthCheck,omitempty"`
-	Sticky      *Sticky       `yaml:"sticky,omitempty"`
+	Servers            []HTTPServer        `yaml:"servers,omitempty"`
+	PassHostHeader     *bool               `yaml:"passHostHeader,omitempty"`
+	ResponseForwarding *ResponseForwarding `yaml:"responseForwarding,omitempty"`
+	HealthCheck        *HealthChecks       `yaml:"healthCheck,omitempty"`
+	Sticky             *Sticky             `yaml:"sticky,omitempty"`
+}
+
+type ResponseForwarding struct {
+	FlushInterval string `yaml:"flushInterval,omitempty"`
 }
 
 type Sticky struct {
@@ -61,9 +84,17 @@ type TCPConfig struct {
 }
 
 type TCPRouter struct {
-	Rule        string   `yaml:"rule,omitempty"`
-	Service     string   `yaml:"service,omitempty"`
-	EntryPoints []string `yaml:"entryPoints,omitempty"`
+	Rule        string        `yaml:"rule,omitempty"`
+	Service     string        `yaml:"service,omitempty"`
+	EntryPoints []string      `yaml:"entryPoints,omitempty"`
+	Middlewares []string      `yaml:"middlewares,omitempty"`
+	TLS         *TCPRouterTLS `yaml:"tls,omitempty"`
+}
+
+type TCPRouterTLS struct {
+	Passthrough  bool   `yaml:"passthrough,omitempty"`
+	CertResolver string `yaml:"certResolver,omitempty"`
+	Options      string `yaml:"options,omitempty"`
 }
 
 type TCPService struct {
@@ -71,9 +102,37 @@ type TCPService struct {
 }
 
 type TCPLoadBalancer struct {
-	Servers []TCPServer `yaml:"servers,omitempty"`
+	Servers          []TCPServer    `yaml:"servers,omitempty"`
+	TerminationDelay int            `yaml:"terminationDelay,omitempty"`
+	ProxyProtocol    *ProxyProtocol `yaml:"proxyProtocol,omitempty"`
+}
+
+type ProxyProtocol struct {
+	Version int `yaml:"version,omitempty"`
 }
 
 type TCPServer struct {
+	Address string `yaml:"address,omitempty"`
+}
+
+type UDPConfig struct {
+	Routers  map[string]UDPRouter  `yaml:"routers,omitempty"`
+	Services map[string]UDPService `yaml:"services,omitempty"`
+}
+
+type UDPRouter struct {
+	EntryPoints []string `yaml:"entryPoints,omitempty"`
+	Service     string   `yaml:"service,omitempty"`
+}
+
+type UDPService struct {
+	LoadBalancer UDPLoadBalancer `yaml:"loadBalancer,omitempty"`
+}
+
+type UDPLoadBalancer struct {
+	Servers []UDPServer `yaml:"servers,omitempty"`
+}
+
+type UDPServer struct {
 	Address string `yaml:"address,omitempty"`
 }

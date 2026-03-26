@@ -2,7 +2,18 @@ http:
   routers:
     example:
       rule: Host(`example.com`) && PathPrefix(`/`)
+      entryPoints:
+        - websecure
+      middlewares:
+        - redirect-to-https
       service: example
+      tls:
+        certResolver: letsencrypt
+  middlewares:
+    redirect-to-https:
+      redirectscheme:
+        permanent: true
+        scheme: https
   services:
     example:
       loadBalancer:
@@ -27,9 +38,23 @@ tcp:
       service: example-xmpp
       entryPoints:
         - xmpp
+      tls:
+        passthrough: true
   services:
     example-xmpp:
       loadBalancer:
         servers:
           - address: abcdef123456:5222
           - address: fedcba654321:5222
+udp:
+  routers:
+    example-dns:
+      entryPoints:
+        - udp
+      service: example-dns
+  services:
+    example-dns:
+      loadBalancer:
+        servers:
+          - address: abcdef123456:53
+          - address: fedcba654321:53

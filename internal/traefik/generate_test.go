@@ -35,7 +35,13 @@ func (m *dockerMock) Labels(_ context.Context, containerID string) (map[string]s
 		"com.docker.compose.service": "example",
 	}
 	if containerID == "abcdef1234567890" {
+		// HTTP router
 		base["traefik.http.routers.example.rule"] = "Host(`example.com`) && PathPrefix(`/`)"
+		base["traefik.http.routers.example.entrypoints"] = "websecure"
+		base["traefik.http.routers.example.middlewares"] = "redirect-to-https"
+		base["traefik.http.routers.example.tls"] = "true"
+		base["traefik.http.routers.example.tls.certresolver"] = "letsencrypt"
+		// HTTP service
 		base["traefik.http.services.example.loadbalancer.server.port"] = "9001"
 		base["traefik.http.services.example.loadbalancer.healthCheck.path"] = "/health"
 		base["traefik.http.services.example.loadbalancer.healthCheck.interval"] = "10s"
@@ -46,9 +52,17 @@ func (m *dockerMock) Labels(_ context.Context, containerID string) (map[string]s
 		base["traefik.http.services.example.loadbalancer.sticky.cookie.httpOnly"] = "true"
 		base["traefik.http.services.example.loadbalancer.sticky.cookie.sameSite"] = "strict"
 		base["traefik.http.services.example.loadbalancer.sticky.cookie.maxAge"] = "86400"
+		// HTTP middleware
+		base["traefik.http.middlewares.redirect-to-https.redirectscheme.scheme"] = "https"
+		base["traefik.http.middlewares.redirect-to-https.redirectscheme.permanent"] = "true"
+		// TCP router with TLS passthrough
 		base["traefik.tcp.routers.example-xmpp.rule"] = "HostSNI(`*`)"
 		base["traefik.tcp.routers.example-xmpp.entrypoints"] = "xmpp"
+		base["traefik.tcp.routers.example-xmpp.tls.passthrough"] = "true"
 		base["traefik.tcp.services.example-xmpp.loadbalancer.server.port"] = "5222"
+		// UDP router + service
+		base["traefik.udp.routers.example-dns.entrypoints"] = "udp"
+		base["traefik.udp.services.example-dns.loadbalancer.server.port"] = "53"
 	}
 	return base, nil
 }

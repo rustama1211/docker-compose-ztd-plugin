@@ -11,7 +11,7 @@ if [ "$1" = "docker-cli-plugin-metadata" ]; then
 {
   "SchemaVersion": "0.1.0",
   "Vendor": "Serhii Kuianov",
-  "Version": "v0.4",
+  "Version": "v0.5",
   "ShortDescription": "Docker plugin for docker-compose update with real zero time deployment."
 }
 EOF
@@ -194,16 +194,37 @@ generate_traefik_conf() {
           method: (item["traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.healthCheck.method"] // ""),
           status: (item["traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.healthCheck.status"] // ""),
           headers: (
-            item | to_entries | 
+            item | to_entries |
             map(select(.key | startswith("traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.healthCheck.headers."))) |
             map({
-              key: (.key | split(".") | .[-1]), 
+              key: (.key | split(".") | .[-1]),
               value: .value
             }) |
             from_entries
-          ), 
+          ),
         } | with_entries(select(.value != "" and .value != {}))
-      
+
+      end;
+
+    def extract_sticky(item):
+      ( item["traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.sticky.cookie"] // "" ) as $enabled |
+      ( item["traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.sticky.cookie.name"] // "" ) as $name |
+      ( item["traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.sticky.cookie.secure"] // "" ) as $secure |
+      ( item["traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.sticky.cookie.httpOnly"] // "" ) as $httpOnly |
+      ( item["traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.sticky.cookie.sameSite"] // "" ) as $sameSite |
+      ( item["traefik.http.services." + item["com.docker.compose.service"] + ".loadbalancer.sticky.cookie.maxAge"] // "" ) as $maxAge |
+      if ($enabled == "" and $name == "" and $secure == "" and $httpOnly == "" and $sameSite == "" and $maxAge == "") then
+        empty
+      else
+        { cookie: (
+            {}
+            | if $name != "" then . + { name: $name } else . end
+            | if $secure != "" then . + { secure: ($secure == "true") } else . end
+            | if $httpOnly != "" then . + { httpOnly: ($httpOnly == "true") } else . end
+            | if $sameSite != "" then . + { sameSite: $sameSite } else . end
+            | if $maxAge != "" then . + { maxAge: ($maxAge | tonumber) } else . end
+          )
+        }
       end;
 
 
@@ -219,6 +240,14 @@ generate_traefik_conf() {
         (extract_health_check($item) as $hc |
           if $hc then
             .http.services[$item["com.docker.compose.service"]].loadBalancer += { healthCheck: $hc }
+          else
+            .
+          end
+        ) |
+
+        (extract_sticky($item) as $sticky |
+          if $sticky then
+            .http.services[$item["com.docker.compose.service"]].loadBalancer += { sticky: $sticky }
           else
             .
           end

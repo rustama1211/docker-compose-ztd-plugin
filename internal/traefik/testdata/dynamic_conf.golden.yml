@@ -13,6 +13,13 @@ http:
           path: /health
           interval: 10s
           timeout: 1s
+        sticky:
+          cookie:
+            name: example_sticky
+            secure: true
+            httpOnly: true
+            sameSite: strict
+            maxAge: 86400
 tcp:
   routers:
     example-xmpp:

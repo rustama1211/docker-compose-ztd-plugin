@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ku9nov/docker-compose-ztd-plugin/internal/compose"
@@ -115,6 +116,9 @@ func (g *Generator) Generate(ctx context.Context, composeFiles []string, envFile
 		if hc := extractHealthCheck(labels, serviceName); hc != nil {
 			httpService.LoadBalancer.HealthCheck = hc
 		}
+		if sticky := extractSticky(labels, serviceName); sticky != nil {
+			httpService.LoadBalancer.Sticky = sticky
+		}
 		cfg.HTTP.Services[serviceName] = httpService
 
 		for _, tcpName := range tcpRouterNames(labels) {
@@ -201,6 +205,42 @@ func extractHealthCheck(labels map[string]string, serviceName string) *types.Hea
 		return nil
 	}
 	return hc
+}
+
+func extractSticky(labels map[string]string, serviceName string) *types.Sticky {
+	prefix := "traefik.http.services." + serviceName + ".loadbalancer.sticky.cookie"
+	enabled := labels[prefix]
+	name := labels[prefix+".name"]
+	secureStr := labels[prefix+".secure"]
+	httpOnlyStr := labels[prefix+".httpOnly"]
+	sameSite := labels[prefix+".sameSite"]
+	maxAgeStr := labels[prefix+".maxAge"]
+
+	if enabled == "" && name == "" && secureStr == "" && httpOnlyStr == "" && sameSite == "" && maxAgeStr == "" {
+		return nil
+	}
+
+	cookie := &types.StickyCookie{}
+	if name != "" {
+		cookie.Name = name
+	}
+	if secureStr != "" {
+		b := secureStr == "true"
+		cookie.Secure = &b
+	}
+	if httpOnlyStr != "" {
+		b := httpOnlyStr == "true"
+		cookie.HTTPOnly = &b
+	}
+	if sameSite != "" {
+		cookie.SameSite = sameSite
+	}
+	if maxAgeStr != "" {
+		if n, err := strconv.Atoi(maxAgeStr); err == nil {
+			cookie.MaxAge = n
+		}
+	}
+	return &types.Sticky{Cookie: cookie}
 }
 
 func tcpRouterNames(labels map[string]string) []string {

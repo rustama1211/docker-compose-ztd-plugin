@@ -22,6 +22,19 @@ type HTTPService struct {
 type HTTPLoadBalancer struct {
 	Servers     []HTTPServer  `yaml:"servers,omitempty"`
 	HealthCheck *HealthChecks `yaml:"healthCheck,omitempty"`
+	Sticky      *Sticky       `yaml:"sticky,omitempty"`
+}
+
+type Sticky struct {
+	Cookie *StickyCookie `yaml:"cookie,omitempty"`
+}
+
+type StickyCookie struct {
+	Name     string `yaml:"name,omitempty"`
+	Secure   *bool  `yaml:"secure,omitempty"`
+	HTTPOnly *bool  `yaml:"httpOnly,omitempty"`
+	SameSite string `yaml:"sameSite,omitempty"`
+	MaxAge   int    `yaml:"maxAge,omitempty"`
 }
 
 type HTTPServer struct {

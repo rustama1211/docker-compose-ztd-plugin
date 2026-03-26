@@ -21,7 +21,7 @@ You can use either implementation:
 ### Bash implementation
 
 ```bash
-curl -fsSL https://gist.githubusercontent.com/ku9nov/f76d2b7f65fa266a17c89e0a50880479/raw/9182ae94d16bea270a4228dd17be16f05e156041/install-docker-ztd.sh | bash
+curl -fsSL https://gist.githubusercontent.com/rustama1211/17c22c7a6f240d6b6702e413d4dbf5af/raw/32e71ebd81b59b383e5a2c355027b641ca9e1496/install-docker-ztd.sh | bash
 ```
 
 #### Bash dependencies
@@ -80,7 +80,6 @@ Options:
 - `--proxy TYPE`
 - `--traefik-conf FILE`
 
-
 ## Traefik Labels Supported
 
 - `traefik.enable`
@@ -105,4 +104,3 @@ Options:
 
 - Avoid `container_name` and fixed host `ports` on services that need multi-replica rollout.
 - `nginx-proxy` mode remains not implemented.
-

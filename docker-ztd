@@ -271,6 +271,11 @@ generate_traefik_conf() {
           if $pri != "" then .http.routers[$svc].priority = ($pri | tonumber) else . end
         ) |
 
+        # ruleSyntax (v3)
+        (($item["traefik.http.routers.\($svc).rulesyntax"] // "") as $rs |
+          if $rs != "" then .http.routers[$svc].ruleSyntax = $rs else . end
+        ) |
+
         # TLS — generic: handles tls, tls.certresolver, tls.options,
         #   tls.domains[n].main, tls.domains[n].sans, etc.
         ( . as $state |
@@ -295,8 +300,12 @@ generate_traefik_conf() {
 
         # servers — scheme label overrides default "http"
         (($item["traefik.http.services.\($svc).loadbalancer.server.scheme"] // "http") as $scheme |
+          ($item["traefik.http.services.\($svc).loadbalancer.server.weight"] // "") as $weight |
           .http.services[$svc].loadBalancer.servers =
-            (split_ips[$svc] | map({url: ($scheme + "://" + . + ":" + ($item["traefik.http.services.\($svc).loadbalancer.server.port"] // "80"))}))
+            (split_ips[$svc] | map(
+              {url: ($scheme + "://" + . + ":" + ($item["traefik.http.services.\($svc).loadbalancer.server.port"] // "80"))}
+              + (if $weight != "" then {weight: ($weight | tonumber)} else {} end)
+            ))
         ) |
 
         # passHostHeader
@@ -315,6 +324,16 @@ generate_traefik_conf() {
 
         (extract_sticky($item) as $sticky |
           if $sticky then .http.services[$svc].loadBalancer += { sticky: $sticky } else . end
+        ) |
+
+        # strategy (v3: wrr, p2c, hrw, leasttime)
+        (($item["traefik.http.services.\($svc).loadbalancer.strategy"] // "") as $strategy |
+          if $strategy != "" then .http.services[$svc].loadBalancer.strategy = $strategy else . end
+        ) |
+
+        # serversTransport
+        (($item["traefik.http.services.\($svc).loadbalancer.serverstransport"] // "") as $st |
+          if $st != "" then .http.services[$svc].loadBalancer.serversTransport = $st else . end
         ) |
 
         # ── HTTP Middlewares (generic) ─────────────────────────────────

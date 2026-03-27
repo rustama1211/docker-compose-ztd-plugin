@@ -82,6 +82,10 @@ Options:
 
 ## Traefik Labels Supported
 
+Minimum required Traefik version: **v3.0**
+
+Labels marked *(v3)* require Traefik v3 and are not available in v2.
+
 ### General
 - `traefik.enable`
 
@@ -91,6 +95,7 @@ Options:
 - `traefik.http.routers.<name>.middlewares`
 - `traefik.http.routers.<name>.service`
 - `traefik.http.routers.<name>.priority`
+- `traefik.http.routers.<name>.ruleSyntax` *(v3)* — `v2` or `v3`
 - `traefik.http.routers.<name>.tls`
 - `traefik.http.routers.<name>.tls.certresolver`
 - `traefik.http.routers.<name>.tls.options`
@@ -100,6 +105,9 @@ Options:
 ### HTTP Services
 - `traefik.http.services.<name>.loadbalancer.server.port`
 - `traefik.http.services.<name>.loadbalancer.server.scheme`
+- `traefik.http.services.<name>.loadbalancer.server.weight` *(v3)* — per-server weight for `wrr` strategy
+- `traefik.http.services.<name>.loadbalancer.strategy` *(v3)* — `wrr` | `p2c` | `hrw` | `leasttime`
+- `traefik.http.services.<name>.loadbalancer.serversTransport` *(v3)* — reference to a serversTransport config
 - `traefik.http.services.<name>.loadbalancer.passhostheader`
 - `traefik.http.services.<name>.loadbalancer.responseforwarding.flushinterval`
 - `traefik.http.services.<name>.loadbalancer.healthCheck.path`

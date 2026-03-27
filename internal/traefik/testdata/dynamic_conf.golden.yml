@@ -7,6 +7,7 @@ http:
       middlewares:
         - redirect-to-https
       service: example
+      ruleSyntax: v3
       tls:
         certResolver: letsencrypt
   middlewares:
@@ -19,7 +20,11 @@ http:
       loadBalancer:
         servers:
           - url: http://abcdef123456:9001
+            weight: 2
           - url: http://fedcba654321:9001
+            weight: 2
+        strategy: p2c
+        serversTransport: my-transport
         healthCheck:
           path: /health
           interval: 10s

@@ -41,8 +41,12 @@ func (m *dockerMock) Labels(_ context.Context, containerID string) (map[string]s
 		base["traefik.http.routers.example.middlewares"] = "redirect-to-https"
 		base["traefik.http.routers.example.tls"] = "true"
 		base["traefik.http.routers.example.tls.certresolver"] = "letsencrypt"
+		base["traefik.http.routers.example.rulesyntax"] = "v3"
 		// HTTP service
 		base["traefik.http.services.example.loadbalancer.server.port"] = "9001"
+		base["traefik.http.services.example.loadbalancer.server.weight"] = "2"
+		base["traefik.http.services.example.loadbalancer.strategy"] = "p2c"
+		base["traefik.http.services.example.loadbalancer.serverstransport"] = "my-transport"
 		base["traefik.http.services.example.loadbalancer.healthCheck.path"] = "/health"
 		base["traefik.http.services.example.loadbalancer.healthCheck.interval"] = "10s"
 		base["traefik.http.services.example.loadbalancer.healthCheck.timeout"] = "1s"

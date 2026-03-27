@@ -18,6 +18,7 @@ type HTTPRouter struct {
 	Middlewares []string   `yaml:"middlewares,omitempty"`
 	Service     string     `yaml:"service,omitempty"`
 	Priority    int        `yaml:"priority,omitempty"`
+	RuleSyntax  string     `yaml:"ruleSyntax,omitempty"`
 	TLS         *RouterTLS `yaml:"tls,omitempty"`
 }
 
@@ -42,6 +43,8 @@ type HTTPLoadBalancer struct {
 	ResponseForwarding *ResponseForwarding `yaml:"responseForwarding,omitempty"`
 	HealthCheck        *HealthChecks       `yaml:"healthCheck,omitempty"`
 	Sticky             *Sticky             `yaml:"sticky,omitempty"`
+	Strategy           string              `yaml:"strategy,omitempty"`
+	ServersTransport   string              `yaml:"serversTransport,omitempty"`
 }
 
 type ResponseForwarding struct {
@@ -61,7 +64,8 @@ type StickyCookie struct {
 }
 
 type HTTPServer struct {
-	URL string `yaml:"url,omitempty"`
+	URL    string `yaml:"url,omitempty"`
+	Weight *int   `yaml:"weight,omitempty"`
 }
 
 type HealthChecks struct {

@@ -115,6 +115,9 @@ func (g *Generator) Generate(ctx context.Context, composeFiles []string, envFile
 					router.Priority = n
 				}
 			}
+			if rs := labels["traefik.http.routers."+serviceName+".rulesyntax"]; rs != "" {
+				router.RuleSyntax = rs
+			}
 			router.TLS = extractHTTPRouterTLS(labels, serviceName)
 			cfg.HTTP.Routers[serviceName] = router
 		}
@@ -130,11 +133,17 @@ func (g *Generator) Generate(ctx context.Context, composeFiles []string, envFile
 			httpScheme = "http"
 		}
 
+		httpWeightStr := labels["traefik.http.services."+serviceName+".loadbalancer.server.weight"]
+
 		httpServers := make([]types.HTTPServer, 0, len(endpoints))
 		for _, endpoint := range endpoints {
-			httpServers = append(httpServers, types.HTTPServer{
-				URL: httpScheme + "://" + endpoint + ":" + httpPort,
-			})
+			srv := types.HTTPServer{URL: httpScheme + "://" + endpoint + ":" + httpPort}
+			if httpWeightStr != "" {
+				if n, err := strconv.Atoi(httpWeightStr); err == nil {
+					srv.Weight = &n
+				}
+			}
+			httpServers = append(httpServers, srv)
 		}
 
 		httpLB := types.HTTPLoadBalancer{Servers: httpServers}
@@ -153,6 +162,12 @@ func (g *Generator) Generate(ctx context.Context, composeFiles []string, envFile
 		}
 		if sticky := extractSticky(labels, serviceName); sticky != nil {
 			httpService.LoadBalancer.Sticky = sticky
+		}
+		if strategy := labels["traefik.http.services."+serviceName+".loadbalancer.strategy"]; strategy != "" {
+			httpService.LoadBalancer.Strategy = strategy
+		}
+		if st := labels["traefik.http.services."+serviceName+".loadbalancer.serverstransport"]; st != "" {
+			httpService.LoadBalancer.ServersTransport = st
 		}
 		cfg.HTTP.Services[serviceName] = httpService
 

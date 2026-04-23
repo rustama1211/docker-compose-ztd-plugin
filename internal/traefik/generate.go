@@ -77,6 +77,12 @@ func (g *Generator) Generate(ctx context.Context, composeFiles []string, envFile
 		if err != nil {
 			return err
 		}
+		// Normalize label keys to lowercase so lookups are case-insensitive,
+		// mirroring Traefik's docker provider. Users can write labels in the
+		// camelCase form shown in the official docs (ruleSyntax, serversTransport,
+		// passHostHeader, httpOnly, sameSite, maxAge, followRedirects, ...) and
+		// still match.
+		labels = normalizeLabelKeys(labels)
 
 		serviceName := labels["com.docker.compose.service"]
 		if serviceName == "" {
@@ -92,11 +98,17 @@ func (g *Generator) Generate(ctx context.Context, composeFiles []string, envFile
 		}
 		processedServices[serviceName] = struct{}{}
 
-		// ── HTTP Router ────────────────────────────────────────────────────────
+		// ── HTTP Routers (generic) ─────────────────────────────────────────────
+		// Router names are discovered from label keys, so one compose service
+		// can declare multiple routers under arbitrary names (e.g. "catchall"),
+		// not just a router matching the compose service name.
 
-		routerRule := labels["traefik.http.routers."+serviceName+".rule"]
-		if routerRule != "" {
-			routerSvc := labels["traefik.http.routers."+serviceName+".service"]
+		for _, rtrName := range httpRouterNames(labels) {
+			routerRule := labels["traefik.http.routers."+rtrName+".rule"]
+			if routerRule == "" {
+				continue
+			}
+			routerSvc := labels["traefik.http.routers."+rtrName+".service"]
 			if routerSvc == "" {
 				routerSvc = serviceName
 			}
@@ -104,22 +116,22 @@ func (g *Generator) Generate(ctx context.Context, composeFiles []string, envFile
 				Rule:    routerRule,
 				Service: routerSvc,
 			}
-			if eps := splitEntryPoints(labels["traefik.http.routers."+serviceName+".entrypoints"]); len(eps) > 0 {
+			if eps := splitEntryPoints(labels["traefik.http.routers."+rtrName+".entrypoints"]); len(eps) > 0 {
 				router.EntryPoints = eps
 			}
-			if mws := splitEntryPoints(labels["traefik.http.routers."+serviceName+".middlewares"]); len(mws) > 0 {
+			if mws := splitEntryPoints(labels["traefik.http.routers."+rtrName+".middlewares"]); len(mws) > 0 {
 				router.Middlewares = mws
 			}
-			if pri := labels["traefik.http.routers."+serviceName+".priority"]; pri != "" {
+			if pri := labels["traefik.http.routers."+rtrName+".priority"]; pri != "" {
 				if n, err := strconv.Atoi(pri); err == nil {
 					router.Priority = n
 				}
 			}
-			if rs := labels["traefik.http.routers."+serviceName+".rulesyntax"]; rs != "" {
+			if rs := labels["traefik.http.routers."+rtrName+".rulesyntax"]; rs != "" {
 				router.RuleSyntax = rs
 			}
-			router.TLS = extractHTTPRouterTLS(labels, serviceName)
-			cfg.HTTP.Routers[serviceName] = router
+			router.TLS = extractHTTPRouterTLS(labels, rtrName)
+			cfg.HTTP.Routers[rtrName] = router
 		}
 
 		// ── HTTP Service ───────────────────────────────────────────────────────
@@ -282,7 +294,10 @@ func (g *Generator) Generate(ctx context.Context, composeFiles []string, envFile
 }
 
 func extractHealthCheck(labels map[string]string, serviceName string) *types.HealthChecks {
-	prefix := "traefik.http.services." + serviceName + ".loadbalancer.healthCheck."
+	// Input lookups are lowercase because label keys are normalized upstream.
+	// Output field names (e.g. FollowRedirects → "followRedirects") are defined
+	// by the yaml struct tags on types.HealthChecks.
+	prefix := "traefik.http.services." + serviceName + ".loadbalancer.healthcheck."
 	hc := &types.HealthChecks{
 		Path:            labels[prefix+"path"],
 		Interval:        labels[prefix+"interval"],
@@ -291,7 +306,7 @@ func extractHealthCheck(labels map[string]string, serviceName string) *types.Hea
 		Mode:            labels[prefix+"mode"],
 		Hostname:        labels[prefix+"hostname"],
 		Port:            labels[prefix+"port"],
-		FollowRedirects: labels[prefix+"followRedirects"],
+		FollowRedirects: labels[prefix+"followredirects"],
 		Method:          labels[prefix+"method"],
 		Status:          labels[prefix+"status"],
 	}
@@ -314,13 +329,14 @@ func extractHealthCheck(labels map[string]string, serviceName string) *types.Hea
 }
 
 func extractSticky(labels map[string]string, serviceName string) *types.Sticky {
+	// Input lookups are lowercase because label keys are normalized upstream.
 	prefix := "traefik.http.services." + serviceName + ".loadbalancer.sticky.cookie"
 	enabled := labels[prefix]
 	name := labels[prefix+".name"]
 	secureStr := labels[prefix+".secure"]
-	httpOnlyStr := labels[prefix+".httpOnly"]
-	sameSite := labels[prefix+".sameSite"]
-	maxAgeStr := labels[prefix+".maxAge"]
+	httpOnlyStr := labels[prefix+".httponly"]
+	sameSite := labels[prefix+".samesite"]
+	maxAgeStr := labels[prefix+".maxage"]
 
 	if enabled == "" && name == "" && secureStr == "" && httpOnlyStr == "" && sameSite == "" && maxAgeStr == "" {
 		return nil
@@ -469,6 +485,35 @@ func extractMiddlewares(labels map[string]string) map[string]map[string]interfac
 		}
 	}
 	return result
+}
+
+// normalizeLabelKeys returns a new map with every key lowercased. Values are
+// left untouched. Matches Traefik's docker provider, which is case-insensitive
+// on label keys.
+func normalizeLabelKeys(labels map[string]string) map[string]string {
+	out := make(map[string]string, len(labels))
+	for k, v := range labels {
+		out[strings.ToLower(k)] = v
+	}
+	return out
+}
+
+func httpRouterNames(labels map[string]string) []string {
+	set := map[string]struct{}{}
+	for key := range labels {
+		if strings.HasPrefix(key, "traefik.http.routers.") {
+			parts := strings.Split(key, ".")
+			if len(parts) >= 4 {
+				set[parts[3]] = struct{}{}
+			}
+		}
+	}
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func tcpRouterNames(labels map[string]string) []string {

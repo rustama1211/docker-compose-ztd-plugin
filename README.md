@@ -86,6 +86,21 @@ Minimum required Traefik version: **v3.0**
 
 Labels marked *(v3)* require Traefik v3 and are not available in v2.
 
+**Label keys are case-insensitive.** You can write labels in the camelCase form shown in the official Traefik docs (`ruleSyntax`, `serversTransport`, `passHostHeader`, `responseForwarding.flushInterval`, `httpOnly`, `sameSite`, `maxAge`, `followRedirects`, ...) or in lowercase — both match, mirroring the Traefik docker provider.
+
+**Router names are independent of the compose service name.** One compose service can declare multiple routers under any names. When `.service` is omitted on a router, it defaults to the compose service the labels are attached to — useful for patterns like a dedicated fallback router:
+
+```yaml
+services:
+  my-fallback-app:
+    image: whoami
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.catchall.rule=HostRegexp(`{any:.+}`)"
+      - "traefik.http.routers.catchall.priority=1"
+      - "traefik.http.routers.catchall.entrypoints=web"
+```
+
 ### General
 - `traefik.enable`
 
